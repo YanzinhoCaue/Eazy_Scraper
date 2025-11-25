@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Scraper de Vagas</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Scraper de Vagas</h1>
+    <p class="subtitle">SeasonalJobs · Controle de Lotes</p>
+  </header>
+
+  <section class="controls">
+    <button id="start">Iniciar Coleta (Lote 50)</button>
+    
+    <div class="row">
+      <button id="clear" class="btn-secondary">Limpar Lista</button>
+      <button id="stop" class="btn-danger">PARAR TUDO</button>
+    </div>
+
+    <button id="csv">Exportar CSV Geral</button>
+    <button id="json">Exportar JSON Geral</button>
+    
+    <div id="status">Aguardando comando…</div>
+  </section>
+
+  <section id="list"></section>
+
+  <footer>
+    <small>Sistema de Lotes com Auto-Download</small>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
