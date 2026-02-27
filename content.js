@@ -1,18 +1,13 @@
 (async function() {
-  // Variável de controle global para este escopo
+  if (window.hasScraperInjected) return;
+  window.hasScraperInjected = true;
+
   let stopRequested = false;
-
-  // OUVINTE DE MENSAGENS (Para receber o comando de PARAR do popup)
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'stop-scraping') {
-      console.log('[Scraper] Pedido de parada recebido!');
-      stopRequested = true;
-    }
-  });
-
-  const BATCH_SIZE = 50; 
-  const DELAY_LOAD = 3000;
+  const BASE_DELAY = 3500;
   const DELAY_CLICK = 1000;
+  const MAX_RETRIES = 20;
+  const DELAY_RETRY = 2000;
+
   const delay = ms => new Promise(res => setTimeout(res, ms));
 
   const findLoadMoreBtn = () => {
@@ -23,115 +18,137 @@
     });
   };
 
-  // 1. Preenche a tela
-  async function ensureItems() {
-    let currentCards = document.querySelectorAll('article.cursor-pointer');
-    let attempts = 0;
-    console.log(`[Scraper] Vagas na tela: ${currentCards.length}. Meta: ${BATCH_SIZE}`);
+  // --- EXTRAÇÃO DE DADOS (Função Padrão) ---
+  function extractDataFromPanel(detailContainer) {
+    const title = detailContainer.querySelector('h2')?.innerText.trim() || 'Sem Título';
+    
+    let company = '';
+    const companyContainer = detailContainer.querySelector('.text-gray-500');
+    if (companyContainer) company = companyContainer.innerText.split('\n')[0];
 
-    while (currentCards.length < BATCH_SIZE && attempts < 15) {
-      if (stopRequested) return; // Para se solicitado
+    const telLink = detailContainer.querySelector('a[href^="tel:"]');
+    const phone = telLink ? telLink.innerText.replace('tel:', '').trim() : '';
 
-      const btn = findLoadMoreBtn();
-      if (btn) {
-        btn.click();
-        await delay(DELAY_LOAD);
-        currentCards = document.querySelectorAll('article.cursor-pointer');
-      } else {
-        break;
-      }
-      attempts++;
-    }
+    const mailLink = detailContainer.querySelector('a[href^="mailto:"]');
+    const email = mailLink ? mailLink.innerText.trim() : '';
+
+    const fullText = detailContainer.innerText;
+    const payMatch = fullText.match(/(US\$\s?|\$\s?)\d+([.,]\d{2})?(\s+por\s+hora|\s+per\s+hour)?/i);
+    const pay = payMatch ? payMatch[0] : '';
+
+    let site = '';
+    const allLinks = Array.from(detailContainer.querySelectorAll('a[href^="http"]'));
+    const validLink = allLinks.find(a => 
+        !a.href.includes('facebook') && !a.href.includes('twitter') && !a.href.includes('linkedin') && !a.href.includes('seasonaljobs.dol.gov')
+    );
+    if (validLink) site = validLink.href;
+
+    return { titulo: title, empresa: company, telefone: phone, email: email, site: site, pagamento: pay };
   }
 
-  // 2. Processa o lote
-  async function processBatch() {
-    const cards = Array.from(document.querySelectorAll('article.cursor-pointer'));
-    const batchCards = cards.slice(0, BATCH_SIZE); 
+  // --- MODO 1: APENAS ROLAR ---
+  async function scrollOnly(targetCount) {
+    stopRequested = false;
+    let currentCards = document.querySelectorAll('article.cursor-pointer');
+    let errors = 0;
     
-    if (batchCards.length === 0) {
-      alert("Não há vagas visíveis.");
-      return;
+    while (currentCards.length < targetCount) {
+      if (stopRequested) break;
+      const btn = findLoadMoreBtn();
+      
+      if (btn) {
+        errors = 0;
+        btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+        btn.click();
+        const dynDelay = BASE_DELAY + (currentCards.length * 2);
+        
+        chrome.runtime.sendMessage({ type: 'scroll-update', current: currentCards.length, target: targetCount }).catch(()=>{});
+        console.log(`[Scraper] Carregando... (${currentCards.length} itens)`);
+        
+        await delay(dynDelay);
+        currentCards = document.querySelectorAll('article.cursor-pointer');
+      } else {
+        errors++;
+        console.warn(`[Scraper] Botão sumiu (${errors}/${MAX_RETRIES})`);
+        window.scrollTo(0, document.body.scrollHeight);
+        if (errors >= MAX_RETRIES) break;
+        await delay(DELAY_RETRY);
+        currentCards = document.querySelectorAll('article.cursor-pointer');
+      }
     }
+    chrome.runtime.sendMessage({ type: 'scroll-update', current: currentCards.length, target: targetCount }).catch(()=>{});
+    if(!stopRequested) alert(`Pronto! ${currentCards.length} vagas carregadas.`);
+  }
 
-    console.log(`[Scraper] Iniciando lote de ${batchCards.length}...`);
-    const extractedData = [];
+  // --- MODO 2: COLETAR TUDO (Seu pedido) ---
+  async function processAllLoaded() {
+    stopRequested = false;
+    // Pega TUDO que está na tela agora
+    const cards = Array.from(document.querySelectorAll('article.cursor-pointer'));
+    
+    if (cards.length === 0) return alert("Nenhuma vaga encontrada. Role a tela primeiro.");
+    if (!confirm(`Existem ${cards.length} vagas carregadas. Iniciar coleta completa?`)) return;
 
-    for (let i = 0; i < batchCards.length; i++) {
-      // --- PONTO DE PARADA ---
+    console.log(`[Scraper] Iniciando coleta massiva de ${cards.length} itens...`);
+    
+    let batchData = []; // Acumulador temporário
+
+    for (let i = 0; i < cards.length; i++) {
       if (stopRequested) {
-        console.warn('[Scraper] Parando loop imediatamente.');
-        chrome.runtime.sendMessage({ type: 'scrape-stopped' });
-        alert(`Processo interrompido!\n\nForam coletadas ${extractedData.length} vagas neste lote antes de parar.\nElas serão salvas.`);
-        break; // Quebra o loop
+        alert('Parado pelo usuário.');
+        break;
       }
 
       try {
-        const card = batchCards[i];
+        const card = cards[i];
         card.scrollIntoView({ behavior: 'auto', block: 'center' });
         card.click();
-        await delay(DELAY_CLICK);
+        await delay(800); // Rápido pois já está carregado
 
         const detailContainer = document.getElementById('job-detail');
-
         if (detailContainer) {
-          const titleEl = detailContainer.querySelector('h2');
-          const title = titleEl ? titleEl.innerText.trim() : 'Sem Título';
-
-          let company = '';
-          const companyContainer = detailContainer.querySelector('.text-gray-500');
-          if (companyContainer) company = companyContainer.innerText.split('\n')[0];
-
-          const telLink = detailContainer.querySelector('a[href^="tel:"]');
-          const phone = telLink ? telLink.innerText.replace('tel:', '').trim() : '';
-
-          const mailLink = detailContainer.querySelector('a[href^="mailto:"]');
-          const email = mailLink ? mailLink.innerText.trim() : '';
-
-          const fullText = detailContainer.innerText;
-          const payMatch = fullText.match(/(US\$\s?|\$\s?)\d+([.,]\d{2})?(\s+por\s+hora|\s+per\s+hour)?/i);
-          const pay = payMatch ? payMatch[0] : '';
-
-          let site = '';
-          const allLinks = Array.from(detailContainer.querySelectorAll('a[href^="http"]'));
-          const validLink = allLinks.find(a => 
-              !a.href.includes('facebook') && !a.href.includes('twitter') && 
-              !a.href.includes('linkedin') && !a.href.includes('seasonaljobs.dol.gov')
-          );
-          if (validLink) site = validLink.href;
-
-          extractedData.push({ titulo: title, empresa: company, telefone: phone, email: email, site: site, pagamento: pay });
+          const data = extractDataFromPanel(detailContainer);
+          batchData.push(data);
         }
-
-        // Remove da tela (só remove se não foi cancelado antes, mas aqui já passou o check)
+        
+        // Remove da tela para liberar memória (CRUCIAL para 2000+ itens)
         card.remove();
 
+        // Feedback
+        if (i % 10 === 0) {
+            console.log(`[Scraper] Progresso: ${i}/${cards.length}`);
+            chrome.runtime.sendMessage({ type: 'scrape-progress', done: i+1, total: cards.length }).catch(()=>{});
+        }
+
+        // Backup de Segurança a cada 50 itens (Salva mas NÃO baixa arquivo)
+        if (batchData.length >= 50) {
+            chrome.runtime.sendMessage({ type: 'save-backup', payload: batchData }).catch(()=>{});
+            batchData = []; // Limpa temp
+        }
+
       } catch (err) {
-        console.error("Erro:", err);
+        console.error(err);
       }
     }
 
-    // Envia o que conseguiu pegar (mesmo se parou no meio)
-    if (extractedData.length > 0) {
-      chrome.runtime.sendMessage({ type: 'scrape-batch-data', payload: extractedData }, () => {
-        // Se parou, não mostra o alerta de "finalizado com sucesso", o alert de parada já foi
-        if (!stopRequested) {
-            setTimeout(() => {
-                alert(`Lote finalizado!\n\nBaixado CSV com ${extractedData.length} vagas.\n\nClique em "Iniciar" novamente para o próximo.`);
-            }, 1000);
-        }
-      });
+    // Salva o resto e DISPARA O DOWNLOAD FINAL
+    if (batchData.length > 0) {
+        chrome.runtime.sendMessage({ type: 'save-backup', payload: batchData }, () => {
+             // Avisa o background para gerar o arquivo final
+             chrome.runtime.sendMessage({ type: 'download-all' });
+        });
+    } else {
+        // Se acabou no múltiplo exato, só baixa
+        chrome.runtime.sendMessage({ type: 'download-all' });
     }
   }
 
-  // Reset de segurança ao iniciar (se recarregar o script)
-  stopRequested = false;
-  
-  await ensureItems();
-  if (!stopRequested) {
-      await processBatch();
-  } else {
-      alert('Parado antes de processar os itens.');
-  }
+  // --- LISTENER ---
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'scroll-only') scrollOnly(msg.target);
+    else if (msg.type === 'scrape-all-loaded') processAllLoaded(); // Novo
+    else if (msg.type === 'start-extraction') { /* Logica antiga de lotes 50 se quiser manter */ } 
+    else if (msg.type === 'stop-scraping') stopRequested = true;
+  });
 
 })();
