@@ -4,31 +4,49 @@
 <meta charset="UTF-8">
 <title>Scraper de Vagas</title>
 <link rel="stylesheet" href="popup.css" />
+<style>
+  .input-row { display: flex; gap: 10px; margin-bottom: 10px; }
+  .input-num { width: 80px; background: #1f2340; border: 1px solid #333; color: #fff; border-radius: 8px; text-align: center; font-weight: bold; }
+  /* Botão especial roxo */
+  #scrapeAll { background: linear-gradient(135deg, #7c3aed, #db2777); color: white; margin-bottom: 15px; border: 1px solid #ffffff33; }
+  #scrapeAll:hover { opacity: 0.9; box-shadow: 0 0 10px #7c3aed; }
+</style>
 </head>
 <body>
   <header>
     <h1>Scraper de Vagas</h1>
-    <p class="subtitle">SeasonalJobs · Controle de Lotes</p>
+    <p class="subtitle">SeasonalJobs · Controle Total</p>
   </header>
 
   <section class="controls">
-    <button id="start">Iniciar Coleta (Lote 50)</button>
     
-    <div class="row">
-      <button id="clear" class="btn-secondary">Limpar Lista</button>
-      <button id="stop" class="btn-danger">PARAR TUDO</button>
+    <div style="border-bottom:1px solid #1f2340; margin-bottom:15px; padding-bottom:5px;">
+      <div id="status-scroll" style="font-size:11px; color:#b7c0c9; margin-bottom:5px;">1. Preparar Lista:</div>
+      <div class="input-row">
+        <input type="number" id="targetAmount" class="input-num" value="500" step="50">
+        <button id="btnScroll" style="background:#444;">Rolar Tela</button>
+      </div>
     </div>
 
-    <button id="csv">Exportar CSV Geral</button>
-    <button id="json">Exportar JSON Geral</button>
+    <button id="scrapeAll">2. COLETAR TUDO (Arquivo Único)</button>
+
+    <div class="row">
+      <button id="start" style="font-size:11px; opacity:0.7">Coletar Lote (50)</button>
+      <button id="stop" class="btn-danger">PARAR</button>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <button id="csv">Exportar CSV</button>
+      <button id="clear" class="btn-secondary">Limpar</button>
+    </div>
     
-    <div id="status">Aguardando comando…</div>
+    <div id="status">Aguardando...</div>
   </section>
 
   <section id="list"></section>
 
   <footer>
-    <small>Sistema de Lotes com Auto-Download</small>
+    <small>Modo: Carregar tudo -> Coletar tudo</small>
   </footer>
 
   <script src="popup.js"></script>
