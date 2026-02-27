@@ -1,67 +1,53 @@
-// Função auxiliar para criar o texto do CSV
+// Função CSV
 function createCSVContent(items) {
   const header = ['titulo', 'empresa', 'pagamento', 'telefone', 'email', 'site'];
-  const rows = items.map(it => 
-    header.map(h => `"${(it[h] || '').replace(/"/g, '""')}"`).join(',')
-  );
+  const rows = items.map(it => header.map(h => `"${(it[h] || '').replace(/"/g, '""')}"`).join(','));
   return [header.join(','), ...rows].join('\n');
+}
+
+// Download Helper
+function triggerDownload(items, suffix) {
+  if (!items || !items.length) return;
+  try {
+    const csvContent = createCSVContent(items);
+    const bom = '\uFEFF'; 
+    const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8' });
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const url = e.target.result;
+      const date = new Date();
+      const timeStr = `${date.getHours()}h${date.getMinutes()}m`;
+      chrome.downloads.download({ url: url, filename: `vagas_${suffix}_${timeStr}.csv`, saveAs: false });
+    };
+    reader.readAsDataURL(blob);
+  } catch (e) { console.error(e); }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   
-  // Repassa progresso
   if (msg?.type === 'scrape-progress') {
     chrome.runtime.sendMessage(msg).catch(()=>{});
-    sendResponse({ ok: true });
-    return true;
   }
 
-  // Recebe LOTE e baixa
-  if (msg?.type === 'scrape-batch-data') {
+  // Apenas SALVA no storage (Backup silencioso)
+  if (msg?.type === 'save-backup') {
     const newItems = msg.payload || [];
-    
-    // Salva no storage (backup)
     chrome.storage.local.get('vagasColetadas', (result) => {
       const existingItems = result.vagasColetadas || [];
       const allItems = [...existingItems, ...newItems];
-      chrome.storage.local.set({ vagasColetadas: allItems });
+      chrome.storage.local.set({ vagasColetadas: allItems }, () => {
+        console.log(`[SW] Backup salvo. Total: ${allItems.length}`);
+      });
     });
+  }
 
-    // GERA O CSV COM "BOM" (Para acentuação correta no Excel/Sheets)
-    try {
-      let csvContent = createCSVContent(newItems);
-      
-      // --- AQUI ESTÁ O TRUQUE ---
-      // Adiciona o caractere invisível BOM (\uFEFF) no início
-      // Isso força o Excel/Sheets a reconhecer acentos corretamente
-      const bom = '\uFEFF'; 
-      const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8' });
-      
-      // Converte para Base64 para o sistema de downloads do Chrome
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const url = e.target.result; // Data URL base64 direto do Blob
-        
-        const date = new Date();
-        const timeStr = `${date.getHours()}h${date.getMinutes()}m`;
-        const filename = `vagas_lote_${newItems.length}_${timeStr}.csv`;
-
-        chrome.downloads.download({
-          url: url,
-          filename: filename,
-          saveAs: false
-        }, () => {
-           // Avisa o popup que terminou
-          chrome.runtime.sendMessage({ type: 'scrape-complete', count: newItems.length }).catch(()=>{});
-        });
-      };
-      reader.readAsDataURL(blob);
-
-    } catch (e) {
-      console.error("Erro CSV:", e);
-    }
-
-    sendResponse({ ok: true });
-    return true;
+  // DOWNLOAD FINAL (Acionado quando acaba tudo)
+  if (msg?.type === 'download-all') {
+    chrome.storage.local.get('vagasColetadas', (result) => {
+      const allItems = result.vagasColetadas || [];
+      console.log(`[SW] Gerando CSV Final com ${allItems.length} itens.`);
+      triggerDownload(allItems, 'COMPLETO');
+      chrome.runtime.sendMessage({ type: 'scrape-complete', count: allItems.length }).catch(()=>{});
+    });
   }
 });
